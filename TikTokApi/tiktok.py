@@ -4,21 +4,21 @@ import os
 import threading
 import asyncio
 import random
+import re
 import string
 import time
 from typing import ClassVar, Optional
 from urllib import request
 from urllib.parse import quote, urlencode
 
-import requests
+from selenium import webdriver
+
 from .api.sound import Sound
 from .api.user import User
 from .api.search import Search
 from .api.hashtag import Hashtag
 from .api.video import Video
 from .api.trending import Trending
-
-from playwright.sync_api import sync_playwright
 
 from .exceptions import *
 from .utilities import LOGGER_NAME, update_messager
@@ -115,18 +115,17 @@ class TikTokApi:
 
         self.logger.setLevel(logging_level)
 
-        with _thread_lock:
-            self._initialize(
-                request_delay=request_delay,
-                custom_device_id=custom_device_id,
-                generate_static_device_id=generate_static_device_id,
-                custom_verify_fp=custom_verify_fp,
-                use_test_endpoints=use_test_endpoints,
-                proxy=proxy,
-                executable_path=executable_path,
-                *args,
-                **kwargs,
-            )
+        self._initialize(
+            request_delay=request_delay,
+            custom_device_id=custom_device_id,
+            generate_static_device_id=generate_static_device_id,
+            custom_verify_fp=custom_verify_fp,
+            use_test_endpoints=use_test_endpoints,
+            proxy=proxy,
+            executable_path=executable_path,
+            *args,
+            **kwargs,
+        )
 
     def _initialize(self, **kwargs):
         # Add classes from the api folder
@@ -160,19 +159,18 @@ class TikTokApi:
             )
 
         if self._signer_url is None:
-            self._browser = asyncio.get_event_loop().run_until_complete(
-                asyncio.gather(browser.create(**kwargs))
-            )[0]
+            self._browser = webdriver.Chrome()
 
-            self._user_agent = self._browser.user_agent
+            self._user_agent = self._browser.execute_script("return navigator.userAgent")
 
         try:
-            self._timezone_name = self._browser.timezone_name
-            self._browser_language = self._browser.browser_language
-            self._width = self._browser.width
-            self._height = self._browser.height
-            self._region = self._browser.region
-            self._language = self._browser.language
+            self._timezone_name = ""
+            self._browser_language = self._browser.execute_script("return window.navigator.userLanguage || window.navigator.language")
+            window_size = self._browser.get_window_size()
+            self._width = window_size['width']
+            self._height = window_size['height']
+            self._region = "US"
+            self._language = "en"
         except Exception as e:
             self.logger.exception(
                 "An error occurred while opening your browser, but it was ignored\n",
@@ -186,6 +184,8 @@ class TikTokApi:
             self._region = "US"
             self._language = "en"
             raise e from e
+
+        
 
     def get_data(self, path, subdomain="m", **kwargs) -> dict:
         """Makes requests to TikTok and returns their JSON.
@@ -212,27 +212,21 @@ class TikTokApi:
         tt_params = None
         send_tt_params = kwargs.get("send_tt_params", False)
 
-        full_url = f"https://{subdomain}.tiktok.com/" + path
+        base_url = f"https://{subdomain}.tiktok.com/"
+        full_url = base_url + path
 
         if self._signer_url is None:
             kwargs["custom_verify_fp"] = verifyFp
-            (
-                verify_fp,
-                device_id,
-                signature,
-                tt_params,
-            ) = asyncio.get_event_loop().run_until_complete(
-                asyncio.gather(
-                    self._browser.sign_url(
-                        full_url, calc_tt_params=send_tt_params, **kwargs
-                    )
-                )
-            )[
-                0
-            ]
 
-            user_agent = self._browser.user_agent
-            referrer = self._browser.referrer
+            #(
+            #    verify_fp,
+            #    device_id,
+            #    signature,
+            #    tt_params,
+            #) = self._browser.sign_url()
+            
+            user_agent = self._browser.execute_script("return navigator.userAgent")
+            #referrer = self._browser.referrer
         else:
             (
                 verify_fp,
@@ -249,62 +243,30 @@ class TikTokApi:
         if not kwargs.get("send_tt_params", False):
             tt_params = None
 
-        query = {"verifyFp": verify_fp, "device_id": device_id, "_signature": signature}
-        url = "{}&{}".format(full_url, urlencode(query))
+        #query = {"verifyFp": verify_fp, "device_id": device_id, "_signature": signature}
+        #url = "{}&{}".format(full_url, urlencode(query))
+        url = full_url
 
-        h = requests.head(
-            url,
-            headers={"x-secsdk-csrf-version": "1.2.5", "x-secsdk-csrf-request": "1"},
-            proxies=self._format_proxy(processed.proxy),
-            **self._requests_extra_kwargs,
-        )
-
-        csrf_token = None
-        if subdomain == "m":
-            csrf_session_id = h.cookies["csrf_session_id"]
-            csrf_token = h.headers["X-Ware-Csrf-Token"].split(",")[1]
-            kwargs["csrf_session_id"] = csrf_session_id
-
-        headers = {
-            "authority": "m.tiktok.com",
-            "method": "GET",
-            "path": url.split("tiktok.com")[1],
-            "scheme": "https",
-            "accept": "application/json, text/plain, */*",
-            "accept-encoding": "gzip",
-            "accept-language": "en-US,en;q=0.9",
-            "origin": referrer,
-            "referer": referrer,
-            "sec-fetch-dest": "empty",
-            "sec-fetch-mode": "cors",
-            "sec-fetch-site": "none",
-            "sec-gpc": "1",
-            "user-agent": user_agent,
-            "x-secsdk-csrf-token": csrf_token,
-            "x-tt-params": tt_params,
-        }
-
-        self.logger.debug(f"GET: %s\n\theaders: %s", url, headers)
-        r = requests.get(
-            url,
-            headers=headers,
-            cookies=self._get_cookies(**kwargs),
-            proxies=self._format_proxy(processed.proxy),
-            **self._requests_extra_kwargs,
-        )
+        self.logger.debug(f"GET: %s", url)
+        r = self._browser.get(url)
 
         try:
-            parsed_data = r.json()
+            html = self._browser.page_source
+
+            resp = self._extra_next_data(html)
+            parsed_data = json.loads(resp)
+
             if (
                 parsed_data.get("type") == "verify"
                 or parsed_data.get("verifyConfig", {}).get("type", "") == "verify"
             ):
                 self.logger.error(
-                    "Tiktok wants to display a captcha.\nResponse:\n%s\nCookies:\n%s\nURL:\n%s",
-                    r.text,
-                    self._get_cookies(**kwargs),
+                    "Tiktok wants to display a captcha.\nURL:\n%s",
                     url,
                 )
+                self._browser.get(base_url)
+                input('Solve captcha and press enter!')
+
                 raise CaptchaException(
                     "TikTok blocks this request displaying a Captcha \nTip: Consider using a proxy or a custom_verify_fp as method parameters"
                 )
@@ -367,7 +329,8 @@ class TikTokApi:
                     )
                 )
 
-            return r.json()
+            return parsed_data
+
         except ValueError as e:
             text = r.text
             self.logger.debug("TikTok response: %s", text)
@@ -595,10 +558,19 @@ class TikTokApi:
 
         return urlencode(query)
 
+    def _extra_next_data(self, html):
+        resp = self.r1(r'<html><head><meta name="color-scheme" content="light dark"><\/head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">(.*?)<\/pre><\/body><\/html>', html)# or \
+        #self.r1(r'<script id="SIGI_STATE" type="application/json">(.*?)</script>', html)
+        return resp
+
+    def r1(self, pattern, text):
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+
     def shutdown(self) -> None:
-        with _thread_lock:
-            self.logger.debug("Shutting down Playwright")
-            asyncio.get_event_loop().run_until_complete(self._browser._clean_up())
+        self._browser.close()
+        self._browser.quit()
 
     def __enter__(self):
         with _thread_lock:

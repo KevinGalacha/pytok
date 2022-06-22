@@ -1,7 +1,6 @@
 import random
 import time
 import string
-import requests
 import logging
 import time
 import random

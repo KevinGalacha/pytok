@@ -67,7 +67,8 @@ class Video:
         video_data = api.video(id='7041997751718137094').info()
         ```
         """
-        return self.info_full(**kwargs)["itemInfo"]["itemStruct"]
+        info_full = self.info_full(**kwargs)
+        return info_full["itemInfo"]["itemStruct"]
 
     def info_full(self, **kwargs) -> dict:
         """

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import requests
 
 from urllib.parse import quote, urlencode
 

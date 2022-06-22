@@ -8,11 +8,11 @@ from .user import User
 from .sound import Sound
 from .hashtag import Hashtag
 from .video import Video
+from ..exceptions import *
 
 if TYPE_CHECKING:
     from ..tiktok import TikTokApi
 
-import requests
 
 
 class Search:
@@ -77,12 +77,12 @@ class Search:
 
         cursor = offset
 
-        spawn = requests.head(
-            "https://www.tiktok.com",
-            proxies=Search.parent._format_proxy(processed.proxy),
-            **Search.parent._requests_extra_kwargs
-        )
-        ttwid = spawn.cookies["ttwid"]
+        if obj_type == "user":
+            subdomain = "www"
+        elif obj_type == "item":
+            subdomain = "us"
+        else:
+            raise TypeError("invalid obj_type")
 
         # For some reason when <= it can be off by one.
         while cursor - offset <= count:
@@ -95,28 +95,27 @@ class Search:
                 obj_type, Search.parent._add_url_params(), urlencode(query)
             )
 
-            if obj_type == "user":
-                subdomain = "www"
-            elif obj_type == "item":
-                subdomain = "us"
-            else:
-                raise TypeError("invalid obj_type")
-
-            api_response = Search.parent.get_data(
-                path, subdomain=subdomain, ttwid=ttwid, **kwargs
-            )
-
-            # When I move to 3.10+ support make this a match switch.
-            for result in api_response.get("user_list", []):
-                yield User(data=result)
-
-            for result in api_response.get("item_list", []):
-                yield Video(data=result)
-
-            if api_response.get("has_more", 0) == 0:
-                Search.parent.logger.info(
-                    "TikTok is not sending videos beyond this point."
+            try:
+                api_response = Search.parent.get_data(
+                    path, subdomain=subdomain, **kwargs
                 )
-                return
 
-            cursor = int(api_response.get("cursor", cursor))
+                # When I move to 3.10+ support make this a match switch.
+                for result in api_response.get("user_list", []):
+                    yield User(data=result)
+
+                for result in api_response.get("item_list", []):
+                    yield Video(data=result)
+
+                if api_response.get("has_more", 0) == 0:
+                    Search.parent.logger.info(
+                        "TikTok is not sending videos beyond this point."
+                    )
+                    return
+
+                cursor = int(api_response.get("cursor", cursor))
+                
+            except CaptchaException:
+                continue
+            except Exception:
+                raise

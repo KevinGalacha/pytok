@@ -3,7 +3,6 @@ from urllib.parse import quote, urlencode
 from .exceptions import *
 
 import re
-import requests
 
 
 def extract_tag_contents(html):

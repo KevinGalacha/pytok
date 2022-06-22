@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import requests
 from urllib.parse import urlencode
 
 from .video import Video
